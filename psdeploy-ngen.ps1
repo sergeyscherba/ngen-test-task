@@ -4,28 +4,54 @@ $rg = @{
 }
 New-AzResourceGRoup @rg
 
+# Creating a public IP addresses and specifying a DNS names
+
+$servicePip = New-AzPublicIpAddress `
+  -ResourceGroupName $rg.Name `
+  -Location $rg.Location `
+  -AllocationMethod Static `
+  -Name "servicePip"
+
+$webPip = New-AzPublicIpAddress `
+  -ResourceGroupName $rg.Name `
+  -Location $rg.Location `
+  -AllocationMethod Static `
+  -Name "webPip"
+
+$agwPip = New-AzPublicIpAddress `
+  -ResourceGroupName $rg.Name `
+  -Location $rg.Location `
+  -AllocationMethod Static `
+  -Name "agwPip" `
+  -Sku "Standard"`
+  -DomainNameLabel "agwpip-wizz-ngen"
+  
+$servicePipRef = Get-AzPublicIpAddress -ResourceGroupName wizz-ngen-ps-rg -Name servicePip
+$webPipRef = Get-AzPublicIpAddress -ResourceGroupName wizz-ngen-ps-rg -Name webPip
+$agwPipRef = Get-AzPublicIpAddress -ResourceGroupName wizz-ngen-ps-rg -Name agwPip
 # Creating an inbound network security group rule for port 22
 $nsgRuleExternalSSH = New-AzNetworkSecurityRuleConfig `
--Name "externalSSHRule"  `
--Protocol "Tcp" `
--Direction "Inbound" `
--Priority 1000 `
--SourceAddressPrefix * `
--SourcePortRange * `
--DestinationAddressPrefix $servicePip.IpAddress[0] `
--DestinationPortRange 22 `
--Access "Allow"
+  -Name "externalSSHRule"  `
+  -Protocol "Tcp" `
+  -Direction "Inbound" `
+  -Priority 1000 `
+  -SourceAddressPrefix * `
+  -SourcePortRange * `
+  -DestinationAddressPrefix * `
+  -DestinationPortRange 22 `
+  -Access "Allow"
+
 
 $nsgRuleInternalSSH = New-AzNetworkSecurityRuleConfig `
--Name "internalSSHRule"  `
--Protocol "Tcp" `
--Direction "Inbound" `
--Priority 1001 `
--SourceAddressPrefix $servicePip.IpAddress[0] `
--SourcePortRange 22 `
--DestinationAddressPrefix $webPip.IpAddress[0]`
--DestinationPortRange 22 `
--Access "Allow"
+  -Name "internalSSHRule"  `
+  -Protocol "Tcp" `
+  -Direction "Inbound" `
+  -Priority 1001 `
+  -SourceAddressPrefix $servicePipRef.IpAddress `
+  -SourcePortRange 22 `
+  -DestinationAddressPrefix $webPipRef.IpAddress`
+  -DestinationPortRange 22 `
+  -Access "Allow"
 
 # Creating an inbound network security group rule for port 80
 $nsgRuleWeb = New-AzNetworkSecurityRuleConfig `
@@ -35,55 +61,56 @@ $nsgRuleWeb = New-AzNetworkSecurityRuleConfig `
   -Priority 1002 `
   -SourceAddressPrefix * `
   -SourcePortRange * `
-  -DestinationAddressPrefix $webPip.IpAddress[0] `
+  -DestinationAddressPrefix $webPipRef.IpAddress `
   -DestinationPortRange 80 `
   -Access "Allow"
 
-$nsgRuleWebWAF = New-AzNetworkSecurityRuleConfig `
-  -Name "inboundWebRule"  `
-  -Protocol "Tcp" `
-  -Direction "Inbound" `
-  -Priority 1002 `
-  -SourceAddressPrefix * `
-  -SourcePortRange * `
-  -DestinationAddressPrefix $agwPip.IpAddress[0] `
-  -DestinationPortRange 80 `
-  -Access "Allow"
-
-  $nsgRuleWAFAgwAllow = New-AzNetworkSecurityRuleConfig `
+$nsgRuleWAFAgwAllow = New-AzNetworkSecurityRuleConfig `
   -Name "inboundAGWallow"  `
-  -Protocol "Tcp" `
-  -Direction "Inbound" `
-  -Priority 1005 `
-  -SourceAddressPrefix * `
-  -SourcePortRange * `
-  -DestinationAddressPrefix $agwPip.IpAddress[0] `
-  -DestinationPortRange "65200-65535" `
-  -Access "Allow"
-# Creating an inbound "deny-all" network security group rule 
-$nsgRuleDenyAll = New-AzNetworkSecurityRuleConfig `
-  -Name "denyAllRule"  `
   -Protocol * `
   -Direction "Inbound" `
-  -Priority 1500 `
+  -Priority 100 `
   -SourceAddressPrefix * `
   -SourcePortRange * `
   -DestinationAddressPrefix * `
-  -DestinationPortRange * `
-  -Access "Deny"
+  -DestinationPortRange "65200-65535" `
+  -Access "Allow"
 
+  $nsgRuleWAFAgwAllowOut = New-AzNetworkSecurityRuleConfig `
+  -Name "outboundAGWallow"  `
+  -Protocol * `
+  -Direction "Outbound" `
+  -Priority 100 `
+  -SourceAddressPrefix * `
+  -SourcePortRange * `
+  -DestinationAddressPrefix $agwPipRef.IpAddress `
+  -DestinationPortRange "65200-65535" `
+  -Access "Allow"
+
+
+$nsgRuleWebWAF = New-AzNetworkSecurityRuleConfig `
+  -Name "inboundWebRuleAGW"  `
+  -Protocol * `
+  -Direction "Inbound" `
+  -Priority 1003 `
+  -SourceAddressPrefix * `
+  -SourcePortRange * `
+  -DestinationAddressPrefix $agwPipRef.IpAddress `
+  -DestinationPortRange 80 `
+  -Access "Allow"
+  
 # Creating a network security groups
 $nsg = New-AzNetworkSecurityGroup `
 -ResourceGroupName $rg.Name `
 -Location $rg.Location `
 -Name "sgDMZ" `
--SecurityRules $nsgRuleExternalSSH,$nsgRuleWeb,$nsgRuleInternalSSH,$nsgRuleWAFAgwAllow,$nsgRuleDenyAll
+-SecurityRules $nsgRuleExternalSSH,$nsgRuleWeb,$nsgRuleWAFAgwAllow,$nsgRuleDMZAgwAllow,$nsgRuleInternalSSH,$nsgRuleWAFAgwAllowOut
 
 $nsgWAF = New-AzNetworkSecurityGroup `
 -ResourceGroupName $rg.Name `
 -Location $rg.Location `
 -Name "sgWAF" `
--SecurityRules $nsgRuleWebWAF,$nsgRuleWAFAgwAllow,$nsgRuleDenyAll
+-SecurityRules $nsgRuleWebWAF,$nsgRuleWAFAgwAllow
 
 $nsgBE = New-AzNetworkSecurityGroup `
 -ResourceGroupName $rg.Name `
@@ -114,6 +141,7 @@ $subnetConfigCORE = New-AzVirtualNetworkSubnetConfig `
   -Name "CORE" `
   -AddressPrefix '10.0.3.0/24' `
   -NetworkSecurityGroup $nsgCORE
+
 $vnet = New-AzVirtualNetwork `
     -Name 'myVNet' `
     -ResourceGroupName $rg.Name `
@@ -121,31 +149,6 @@ $vnet = New-AzVirtualNetwork `
     -AddressPrefix '10.0.0.0/16' `
     -Subnet $subnetConfigWAF, $subnetConfigDMZ, $subnetConfigBE, $subnetConfigCORE
     
-
-
-
-# Creating a public IP addresses and specifying a DNS names
-
-$servicePip = New-AzPublicIpAddress `
-  -ResourceGroupName $rg.Name `
-  -Location $rg.Location `
-  -AllocationMethod Static `
-  -Name "servicePip"
-
-$webPip = New-AzPublicIpAddress `
-  -ResourceGroupName $rg.Name `
-  -Location $rg.Location `
-  -AllocationMethod Static `
-  -Name "webPip"
-
-$agwPip = New-AzPublicIpAddress `
-  -ResourceGroupName $rg.Name `
-  -Location $rg.Location `
-  -AllocationMethod Static `
-  -Name "agwPip" `
-  -Sku "Standard"`
-  -DomainNameLabel "agwpip-wizz-ngen"
-  
 # Creating a virtual network cards and associating with public IP addresses and NSG
 $serviceNic = New-AzNetworkInterface `
 -ResourceGroupName $rg.Name `
@@ -153,7 +156,7 @@ $serviceNic = New-AzNetworkInterface `
 -Location $rg.Location `
 -SubnetId $vnet.Subnets[1].Id `
 -PublicIpAddressId $servicePip.Id `
--NetworkSecurityGroupId $dmzNsg.Id
+-NetworkSecurityGroupId $nsg.Id
 
 $webNic = New-AzNetworkInterface `
 -ResourceGroupName $rg.Name `
@@ -161,7 +164,7 @@ $webNic = New-AzNetworkInterface `
 -Location $rg.Location `
 -SubnetId $vnet.Subnets[1].Id `
 -PublicIpAddressId $webPip.Id `
--NetworkSecurityGroupId $dmzNsg.Id
+-NetworkSecurityGroupId $nsg.Id
 
 # Defining a credential object
 $securePassword = ConvertTo-SecureString ' ' -AsPlainText -Force
@@ -184,7 +187,7 @@ Set-AzVMSourceImage `
 Add-AzVMNetworkInterface `
   -Id $webNic.Id
 
-  $serviceVmConfig = New-AzVMConfig `
+ $serviceVmConfig = New-AzVMConfig `
   -VMName "serviceVM" `
   -VMSize "Standard_A1_v2" | `
 Set-AzVMOperatingSystem `
@@ -226,10 +229,10 @@ Add-AzVMSshPublicKey `
   -Verbose
 
   
-# Creating a Application Gateway(AGW) configuration
+#Creating a Application Gateway(AGW) configuration
 $agwIpConfig = New-AzApplicationGatewayIPConfiguration `
 -Name "myAgwIpConfig" `
--SubnetId $vnet.Subnets[1].Id
+-SubnetId $vnet.Subnets[0].Id
 
 $feIpConfig = New-AzApplicationGatewayFrontendIPConfig `
 -Name "myAgwFrontendIpConfig" `
@@ -244,7 +247,7 @@ $bePool = New-AzApplicationGatewayBackendAddressPool `
 -BackendIPAddresses $webPip.IpAddress[0]
 
 $poolSettings = New-AzApplicationGatewayBackendHttpSetting `
--Name myPoolSettings `
+-Name "myPoolSettings" `
 -Port 80 `
 -Protocol Http `
 -CookieBasedAffinity Enabled `
